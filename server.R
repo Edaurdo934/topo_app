@@ -1,14 +1,20 @@
 library(shiny)
+library(shinyjs)
 library(shinyauthr)
 library(dplyr)
+library(plyr)
 library(sodium)
 library(lubridate)
 library(RPostgreSQL)
 library(DBI)
 library(pool)
+library(sf)
+library(nngeo)
+library(leaflet)
+### Comentario
+#La tabla user_table muestra la información de cada usuario
 
-
-
+options(digits=12, scipen=999)
 # Funciones matriciales
 ## Cálculo matricial Ajuste local horizontal
 ###Función que recibe una matriz con columnas X,Y,E,N y devuelve las matrices A, X, L y V
@@ -53,7 +59,7 @@ resultados <- function(matriz_elementos, x){
         p[i,2] <- b*matriz_elementos[i,1]+a*matriz_elementos[i,2]+T_y
         
     }
-    print(p)
+    return(p)
     
 }
 
@@ -86,45 +92,110 @@ crear_B <- function(x,h){
     
 }
 ### Recibe la matriz E,N,h y devuelve el vector ondulación geoidal y H 
-resultados_H <- function(x, mat_b){
+resultados_H <- function(x, mat_b, matriz_y){
     ondulacion <- matrix(nrow = nrow(x), ncol = 1)
     for (i in 1:nrow(x)) {
         ondulacion[i, 1] <- mat_b[1,1]+mat_b[2,1]*x[i,1]+mat_b[3,1]*x[i,2]
         
     }
     
-    h <- matrix(nrow = nrow(x), ncol = 1)
-    
-    for (i in 1:nrow(x)) {
-        h[i,1] <- x[i,3]
-        
-    }
-    
     matriz_h <- matrix(nrow = nrow(x), ncol = 1)
     
     for (i in 1:nrow(x)) {
-        matriz_h[i,1] <- h[i,1]-ondulacion[i,1]
+        matriz_h[i,1] <- x[i,3]-ondulacion[i,1]
     }
     
-    resultados_f<-list(ondulacion, matriz_h)
+    promedio <- mean(matriz_y)
     
-    return(resultados_f)
+    matriz_2 <- matrix(nrow = nrow(x), ncol = 1)
+    for (i in 1:nrow(x)) {
+        matriz_2[i,1] <- (ondulacion[i,1]-promedio)^2
+        
+    }
+    
+    matrices<-list(ondulacion, matriz_h, matriz_2)
 }
+
+
+
+##### función para el ajuste UTM_plano
+## Recibe un data.frame con columnas E,N y h  además del CRS devuelve un data.frame con "Lat" "Long"  "k_esc" "K_ele" 
+#"K_com"       "dist_UTM"    "Acimut_rad"  "acimut_grad" "dist_top"    "E_top"       "N_top" 
+funcion_UTM_planas <- function(p, crs_input){
+    a <- 6378137.00
+    b <- 6356752.314
+    e2<-0.00669438
+    et2 <- 0.006739497
+    c <- 6399593.626
+    k_0 <- 0.9996
+    
+    h <- st_as_sf(p, coords = c("E","N"), crs=crs_input)
+    q <- st_transform(h, crs = 4326)
+    m <- st_coordinates(q)
+    
+    
+    k_esc <- matrix(nrow = nrow(m), ncol = 1)
+    k_ele <- matrix(nrow = nrow(m), ncol = 1)
+    k_com <- matrix(nrow = nrow(m), ncol = 1)
+    azimut_grad <- matrix(nrow = nrow(m), ncol = 1)
+    azimut_rad <- matrix(nrow = nrow(m), ncol = 1)
+    distance_UTM <- matrix(nrow = nrow(m), ncol = 1)
+    distance_top <- matrix(nrow = nrow(m), ncol = 1)
+    e_top <- matrix(nrow = nrow(m), ncol = 1)
+    n_top <- matrix(nrow = nrow(m), ncol = 1)
+    
+    for (i in 1:nrow(m)) {
+        
+        x <- 500000-p[i,1]
+        q <- 0.000001*x
+        
+        n_k <- a/((1-e2*(sin(m[i,2]*pi/180))^2)^(1/2))
+        p_k <- (10^(12))*((1+et2*(cos(m[i,2]*pi/180))^2)/(2*n_k^2*k_0^2))
+        k_esc[i,1] <- k_0*(1+p_k*q^2+0.00003*q^4)
+        k_ele[i,1] <- (a*(1-e2))/(a*(1-e2)+p[i,3]*(1-e2*(sin(m[i,2]*pi/180))^2)^(3/2))
+        k_com[i,1] <- k_esc[i,1]*k_ele[i,1]
+        if(i==1){
+            azimut_grad[i,1] <- 90
+        }
+        else{
+            azimut_grad[i,1] <- st_azimuth(h[1,1], h[i,1])
+        }
+        azimut_rad[i,1] <- azimut_grad[i,1]*pi/180
+        distance_UTM[i,1] <- st_distance(h)[i,1]
+        distance_top[i,1] <- distance_UTM[i,1]/mean(c(k_com[i,1], k_com[1,1]))
+        e_top[i,1] <- p[1,1]+distance_top[i,1]*sin(azimut_rad[i,1])
+        n_top[i,1] <- p[1,2]+distance_top[i,1]*cos(azimut_rad[i,1])
+    }
+    
+    datos <- data.frame("Lat"=m[,2], "Long"=m[,1], "k_esc"=k_esc, "K_ele"=k_ele, "K_com"=k_com, "dist_UTM"=distance_UTM, "Acimut_rad"=azimut_rad, "acimut_grad"=azimut_rad, "dist_top"=distance_top,"E_top"=e_top, "N_top"=n_top)
+    return(datos)
+    
+    
+    
+}
+
+############### Conexión a la base de datos de aws y ajuste de parámetros del login########
+conexion_base <- dbPool(
+    drv = dbDriver("PostgreSQL", max.con = 100),
+    dbname = "topo_app",
+    host = "database-topoapp.cic5fcsqtcdl.us-east-2.rds.amazonaws.com",
+    user = "postgres",
+    password = "postgres_jose.oro",
+    idleTimeout = 3600000
+)
 
 
 
 ######################## Servidor################################
 shinyServer(function(input, output, session) {
-    
-    ############### Conexión a la base de datos de aws y ajuste de parámetros del login########
-    conexion_base <- dbPool(
-        drv = dbDriver("PostgreSQL", max.con = 100),
-        dbname = "topo_app",
-        host = "database-topoapp.cic5fcsqtcdl.us-east-2.rds.amazonaws.com",
-        user = "postgres",
-        password = "postgres_jose.oro",
-        idleTimeout = 3600000
-    )
+    ## Arregla el bug del cambio de vista al momento de cargar datos para corrección proceso local
+    onclick("archivo_corregir",
+            runjs("
+                  var elemento = document.getElementById('target');
+                  elemento.scrollIntoView(true); 
+                
+                  ")
+            )
     
     # Obtener los usuarios de la base de datos
     sql_usuarios <- "SELECT * FROM usuarios"
@@ -134,7 +205,7 @@ shinyServer(function(input, output, session) {
     
     
     # Días para que la sesión expire
-    cookie_caducidad<- 3
+    cookie_caducidad<- 5
     
     # Función para guardas información de las sesiones en la base de datos
     add_sessionid_to_db <- function(user, sessionid, conn = conexion_base) {
@@ -174,26 +245,26 @@ shinyServer(function(input, output, session) {
     
     ############# Renderizado de la página en función del login y de las credenciales (usuarios, administradores)
     output$navbar<-
-    renderUI(expr = if (credenciales()$user_auth==TRUE) {
+    renderUI(expr = if (credenciales()$user_auth==TRUE && user_data()$acceso==TRUE) {
         
         if(user_data()$permisos%in%"usuario"){
             #Aplicación si se registran como "usuario"
             navbarPage(title = "TopoApp", id="tabs", collapsible = TRUE,
                        tabPanel("Procesos",
-                           h2(paste("Bienvenido ",user_data()$user)),    
+                           h2(paste("Saludos ",user_data()$user)),    
                            tabsetPanel(
                                tabPanel("Ajuste Local",
                                         mainPanel(width = 12,
                                                   fluidRow(
                                                       column(width = 6, class="well",
                                                              h2("Sistema de origen"),
-                                                             fileInput("archivoA", label = h3("Cargar datos")),
+                                                             fileInput("archivoA", label = h3("Cargar datos"), accept = ".csv"),
                                                              uiOutput("tabla_origen")
                                                              
                                                       ),
                                                       column(width = 6, class="well",
                                                              h2("Sistema de destino"),
-                                                             fileInput("archivoB", label = h3("Cargar datos")),
+                                                             fileInput("archivoB", label = h3("Cargar datos"), accept = ".csv"),
                                                              uiOutput("tabla_destino")
                                                       )
                                                   ),
@@ -206,24 +277,37 @@ shinyServer(function(input, output, session) {
                                         
                                         ),
                                tabPanel("UTM-Planas",
-                                        sidebarPanel(width = 3,
-                                                     h2("Ajustes"),
-                                                     radioButtons("proceso_utm", label = h3("UTM - Planas"),
-                                                                  choiceNames = c("Radial", "Continuo"),
-                                                                  choiceValues = c("radial","continuo"),
-                                                                  selected = "radial"
-                                                     ),
-                                                     actionButton("inicio_utm_planas",label = "Iniciar")
-                                                     ),
-                                        mainPanel(width = 9)
+                                        fluidRow(
+                                            column(10,
+                                                   h2("Ajuste UTM-Planas"),
+                                                   fileInput("archivoC", label = h3("Cargar datos"), accept = ".csv")
+                                                   )
+                                        ),
+                                        fluidRow(
+                                            column(12, class="well",
+                                                   tabsetPanel(
+                                                       tabPanel("Datos",
+                                                                uiOutput("panel_utm_planas")
+                                                       ),
+                                                       tabPanel("Resultados",
+                                                                uiOutput("panel_resultados")
+                                                       )
+                                                   )
+                                            )
+                                        )
                                         )
                            )
                        ),
                        tabPanel("Mapa",
-                                #  Tabla user_table en el servidor
-                                tableOutput("user_table")
-                       ),
-                       tabPanel("Historial")
+                            sidebarPanel(width = 3,
+                                         uiOutput("panel_mapa_local"),
+                                         uiOutput("panel_mapa_UTM")
+                                         ),
+                            mainPanel(class="well",
+                                       h2("Ubicación de puntos"),
+                                       uiOutput("panel_mapa")
+                            )  
+                       )
                        
             )
             
@@ -236,6 +320,8 @@ shinyServer(function(input, output, session) {
                                          column(width = 12,class="well",
                                                 h3("Administrador de usuarios"),
                                                 dataTableOutput("tabla_usuarios"),
+                                                br(),
+                                                br(),
                                                 fluidRow(
                                                     column(width = 8, actionButton("acceso", label = "Acceso",  class = "btn-info")),
                                                     column(width = 2, actionButton("eliminar", label = "Eliminar",  class = "btn-info")),
@@ -243,14 +329,11 @@ shinyServer(function(input, output, session) {
                                                 )
                                                 )
                                 )
-                                ),
-                       tabPanel("Datos")
+                                )
             )
             
         }
         
-    } else {
-        NULL
     })
     
     # Info de la sesión: tabla con los usuairios, sesiones, permisos, etc.
@@ -258,7 +341,7 @@ shinyServer(function(input, output, session) {
         credenciales()$info
     })
 
-    ## Borrar al final
+    ## Conserva para ber la información del usuario
     output$user_table <- renderTable({
         # usar req para mostrar los resultados solo si: credentials()$user_auth es TRUE
         req(credenciales()$user_auth)
@@ -277,7 +360,9 @@ shinyServer(function(input, output, session) {
         Encoding(usuarios_plot$nombre)<-'UTF-8'
         datatable(usuarios_plot, options = list(
             language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json'),
-            pageLength = 5
+            pageLength = 5,
+            scrollX = TRUE,
+            searching = FALSE
         ))
     })
     
@@ -341,7 +426,6 @@ shinyServer(function(input, output, session) {
                         dbGetQuery(conexion_base, consulta_usuarios)
                         
                         removeModal()
-                        
                         refresh()
                     }
                     
@@ -470,7 +554,6 @@ shinyServer(function(input, output, session) {
         sql_usuarios <- "SELECT * FROM usuarios"
         usuarios$datos<-dbGetQuery(conexion_base, sql_usuarios)
         
-        
     })
     
     ## Cambia los accesos de usuarios
@@ -519,7 +602,6 @@ shinyServer(function(input, output, session) {
         sql_usuarios <- "SELECT * FROM usuarios"
         usuarios$datos<-dbGetQuery(conexion_base, sql_usuarios)
         
-        
     })
     
     #boton general que cierra las ventanas emergentes si se selecciona el botón cancelar
@@ -528,21 +610,27 @@ shinyServer(function(input, output, session) {
     })
     
     
-    #############################Procesos #############
+################################Procesos ###########################
+###############proceso local#######################    
     # Genera las tablas cuando estas son cargadas a la aplicación
     ## Valores reactivos
     datos<- reactiveValues()
     ##tabla izquirda
     output$tabla_origen<-
         renderUI(expr = if (!is.null(input$archivoA)) {
-            dataTableOutput("tabla_puntos_origen")
+            dataTableOutput("tabla_puntos_origen", )
         } else {
             NULL
         })
     output$tabla_puntos_origen<-renderDataTable({
         req(credenciales()$user_auth)
         datos$puntos_origen<- read.csv(input$archivoA$datapath, sep = ",", header = FALSE)
-        datatable(datos$puntos_origen)
+        datatable(datos$puntos_origen, options = list(
+            language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json'),
+            pageLength = 5,
+            scrollX = TRUE,
+            searching = FALSE
+        ))
     })
     ##otra tabla
     output$tabla_destino<-
@@ -555,7 +643,12 @@ shinyServer(function(input, output, session) {
     output$tabla_puntos_destino<-renderDataTable({
         req(credenciales()$user_auth)
         datos$puntos_destino<- read.csv(input$archivoB$datapath, sep = ",", header = FALSE)
-        datatable(datos$puntos_destino)
+        datatable(datos$puntos_destino, options = list(
+            language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json'),
+            pageLength = 5,
+            scrollX = TRUE,
+            searching = FALSE
+        ))
     })
     #Apartado cálculos, resultados y modelo
     output$panel_emergente<-
@@ -570,7 +663,7 @@ shinyServer(function(input, output, session) {
                              ),
                              uiOutput("botones_coordenadas")
                 ),
-                mainPanel(class="well",
+                mainPanel(class="well", id="target",
                     tabsetPanel(type = "tabs",
                                 tabPanel("Puntos de control",
                                          fluidRow(
@@ -592,15 +685,15 @@ shinyServer(function(input, output, session) {
                                          ),
                                 tabPanel("Nuevos cálculos",
                                          fluidRow(
-                                             column(6,
-                                                    fileInput("archivo_corregir", label = h3("Cargar datos para correción")),
+                                             column(9,
+                                                    fileInput("archivo_corregir", label = h3("Cargar datos para correción"), accept = ".csv"),
                                                     dataTableOutput("datos_a_corregir")
                                                     ),
-                                             column(6, uiOutput("col_datos_correccion"))
+                                             column(3, uiOutput("col_datos_correccion"))
                                          ),
-                                         fluidRow(
-                                             column(10, verbatimTextOutput("texto_corregido"))
-                                         )
+                                         br(),
+                                         br(),
+                                         uiOutput("panel_emergente_resultados_local")
                                          )
                     )
                 )
@@ -612,61 +705,72 @@ shinyServer(function(input, output, session) {
     ## Tabla para matches en función del nombre que escoga el usuario
     
     observeEvent(input$puntos_control,{
-        datos$datos_match<-merge(datos$puntos_origen, datos$puntos_destino, by.x=input$col_name_origen, by.y=input$col_name_destino)
+        
+        #ID  para quue al momento de hacer el match no se ordenen
+        origen<-datos$puntos_origen
+        origen$id  <- 1:nrow(origen)
+        matchP<-merge(origen, datos$puntos_destino, by.x=input$col_name_origen, by.y=input$col_name_destino)
+        matchP<-matchP[order(matchP$id),]
+        datos$datos_match<-matchP%>%select(-id)
         
         output$tabla_puntos_match<-renderDataTable({
             req(credenciales()$user_auth)  
-            datatable(datos$datos_match)
+            datatable(datos$datos_match, options = list(
+                language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json'),
+                pageLength = 5,
+                scrollX = TRUE,
+                searching = FALSE
+            ))
         })
         
     })
     
     ##Panel para pedir coordendas para construir la matriz
     output$botones_coordenadas<-renderUI(
-        expr = if (is.null(datos$datos_match) || is.null(input$proceso_local)) {
+        expr = if (is.null(datos$datos_match) || is.null(input$proceso_local) || nrow(datos$datos_match)<1) {
             NULL
         } else {
             if(length(input$proceso_local)>1){
                 
-                fluidRow(h4("Selecciona las columnas para construir la matriz"),
-                         selectInput("col_N", label = h4("Columna N(Norte)"),
+                div(h4("Selecciona las columnas para construir la matriz"), 
+                         selectInput("col_N", label = "Columna N(Norte)",
                                                choices = names(datos$datos_match), selected=names(datos$datos_match)[2]),
-                         selectInput("col_E", label = h4("Columna E(Este)"),
+                         selectInput("col_E", label = "Columna E(Este)",
                                                choices = names(datos$datos_match), selected=names(datos$datos_match)[3]),
-                         selectInput("col_h", label = h4("Columna h(Altura elipsoidal)"),
+                         selectInput("col_h", label = "Columna h(Altura elipsoidal)",
                                                choices = names(datos$datos_match), selected=names(datos$datos_match)[4]),
-                         selectInput("col_Y", label = h4("Columna Y(Norte)"),
+                         selectInput("col_Y", label ="Columna Y(Norte)",
                                                choices = names(datos$datos_match), selected=names(datos$datos_match)[5]),
-                         selectInput("col_X", label = h4("Columna X(Este)"),
+                         selectInput("col_X", label = "Columna X(Este)",
                                                choices = names(datos$datos_match), selected=names(datos$datos_match)[6]),
-                         selectInput("col_H", label = h4("Columna H(Altura ortométrica)"),
+                         selectInput("col_H", label = "Columna H(Altura ortométrica)",
                                                choices = names(datos$datos_match), selected=names(datos$datos_match)[7]),
-                         actionButton("inicio_ajuste_local",label = "Iniciar")
+                         actionButton("inicio_ajuste_local",label = "Iniciar", class = "btn-danger")
                 )
             }else if(input$proceso_local=="horizontal"){
-                fluidRow(h4("Selecciona las columnas para construir la matriz"),
-                         selectInput("col_N", label = h4("Columna N(Norte)"),
+                div(h4("Selecciona las columnas para construir la matriz"), 
+                         selectInput("col_N", label = "Columna N(Norte)",
                                                choices = names(datos$datos_match), selected=names(datos$datos_match)[2]),
-                         selectInput("col_E", label = h4("Columna E(Este)"),
+                         selectInput("col_E", label = "Columna E(Este)",
                                                choices = names(datos$datos_match), selected=names(datos$datos_match)[3]),
-                         selectInput("col_Y", label = h4("Columna Y(Norte)"),
+                         selectInput("col_Y", label = "Columna Y(Norte)",
                                                choices = names(datos$datos_match), selected=names(datos$datos_match)[4]),
-                         selectInput("col_X", label = h4("Columna X(Este)"),
+                         selectInput("col_X", label = "Columna X(Este)",
                                                choices = names(datos$datos_match), selected=names(datos$datos_match)[5]),
-                         actionButton("inicio_ajuste_local",label = "Iniciar")
+                         actionButton("inicio_ajuste_local",label = "Iniciar", class = "btn-danger")
                 )
                 
             } else if (input$proceso_local=="vertical"){
-                fluidRow(h4("Selecciona las columnas para construir la matriz"),
-                         selectInput("col_N", label = h4("Columna N(Norte)"),
+                div(h4("Selecciona las columnas para construir la matriz"),
+                         selectInput("col_N", label = "Columna N(Norte)",
                                      choices = names(datos$datos_match), selected=names(datos$datos_match)[2]),
-                         selectInput("col_E", label = h4("Columna E(Este)"),
+                         selectInput("col_E", label = "Columna E(Este)",
                                      choices = names(datos$datos_match), selected=names(datos$datos_match)[3]),
-                         selectInput("col_h", label = h4("Columna h(Altura elipsoidal)"),
+                         selectInput("col_h", label = "Columna h(Altura elipsoidal)",
                                                choices = names(datos$datos_match), selected=names(datos$datos_match)[4]),
-                         selectInput("col_H", label = h4("Columna H(Altura ortométrica)"),
+                         selectInput("col_H", label = "Columna H(Altura ortométrica)",
                                                choices = names(datos$datos_match), selected=names(datos$datos_match)[5]),
-                         actionButton("inicio_ajuste_local",label = "Iniciar")
+                         actionButton("inicio_ajuste_local",label = "Iniciar",class = "btn-danger"),
                 )
             } else {
                 NULL
@@ -676,12 +780,31 @@ shinyServer(function(input, output, session) {
     
     ######## Cálculo Ajuste local (Obtener modelo)################
     
-    observeEvent(input$inicio_ajuste_local,{
+    observeEvent(input$aceptar_proceso_local,{
         if(length(input$proceso_local)>1){
+            
             matriz_coordenadas_H<-datos$datos_match[,c(input$col_X, input$col_Y,input$col_E, input$col_N)]
             matriz_coordenadas_V<-datos$datos_match[,c(input$col_N, input$col_E,input$col_H, input$col_h)]
             
-            matriz_resultados_H<-crear_X(matriz_coordenadas_H)
+            # Restricciones
+            if(class(matriz_coordenadas_H[,input$col_X])!="numeric" || class(matriz_coordenadas_H[,input$col_Y])!="numeric" ||
+               class(matriz_coordenadas_H[,input$col_E])!="numeric" || class(matriz_coordenadas_H[,input$col_N])!="numeric" ||
+               class(matriz_coordenadas_V[,input$col_N])!="numeric" || class(matriz_coordenadas_V[,input$col_E])!="numeric" ||
+               class(matriz_coordenadas_V[,input$col_H])!="numeric" || class(matriz_coordenadas_V[,input$col_h])!="numeric"
+               ){
+                
+                showModal(modalDialog(title = "Error",
+                                      h4("Error: Tus columnas no son de tipo número: a)Asugurate de que tus columnas sean de tipo número
+                             b) Asegurate de que tus tablas no tengan un encabezado"
+                                      ),
+                                      size = "m",
+                                      easyClose = TRUE
+                )
+                )
+                return()
+            }
+            
+            matriz_resultados_H<-crear_X(matriz_coordenadas_H[,c(3,4,1,2)])
             names(matriz_resultados_H)<-c("A","X","L","V")
             
             matriz_resultados_V<-crear_B(matriz_coordenadas_V)
@@ -694,17 +817,51 @@ shinyServer(function(input, output, session) {
             
         } else if (input$proceso_local=="horizontal"){
             matriz_coordenadas<-datos$datos_match[,c(input$col_X, input$col_Y,input$col_E, input$col_N)]
-            matriz_resultados<-crear_X(matriz_coordenadas)
+            
+            # Restricciones
+            if(class(matriz_coordenadas[,input$col_X])!="numeric" || class(matriz_coordenadas[,input$col_Y])!="numeric" ||
+               class(matriz_coordenadas[,input$col_E])!="numeric" || class(matriz_coordenadas[,input$col_N])!="numeric"){
+                
+                showModal(modalDialog(title = "Error",
+                                      h4("Error: Tus columnas no son de tipo número: a)Asugurate de que tus columnas sean de tipo número
+                             b) Asegurate de que tus tablas no tengan un encabezado"
+                                      ),
+                                      size = "m",
+                                      easyClose = TRUE
+                )
+                )
+                return()
+            }
+            
+            matriz_resultados<-crear_X(matriz_coordenadas[,c(3,4,1,2)])
             names(matriz_resultados)<-c("A","X","L","V")
             datos$matrices<-matriz_resultados
         } else if(input$proceso_local=="vertical"){
             matriz_coordenadas<-datos$datos_match[,c(input$col_N, input$col_E,input$col_H, input$col_h)]
+            
+            # Restricciones
+            if(class(matriz_coordenadas[,input$col_N])!="numeric" || class(matriz_coordenadas[,input$col_E])!="numeric" ||
+               class(matriz_coordenadas[,input$col_H])!="numeric" || class(matriz_coordenadas[,input$col_h])!="numeric"){
+                
+                showModal(modalDialog(title = "Error",
+                          h4("Error: Tus columnas no son de tipo número: a)Asugurate de que tus columnas sean de tipo número
+                             b) Asegurate de que tus tablas no tengan un encabezado"
+                             ),
+                          size = "m",
+                          easyClose = TRUE
+                          )
+                          )
+                return()
+            }
+            
             matriz_resultados<-crear_B(matriz_coordenadas)
             names(matriz_resultados)<-c("X","Y","B")
             datos$matrices<-matriz_resultados
         }else{
             NULL
         }
+        
+        removeModal()
     })
     
     output$modelo<-renderPrint({datos$matrices})
@@ -712,10 +869,9 @@ shinyServer(function(input, output, session) {
     ## Descarga los resultados del modelo
     output$descarga_modelo <- downloadHandler(
         
-        filename = function() {"input.txt"},
+        filename = function() {"modelo.txt"},
         content = function(file) {
             
-            # copy to be returned for user
             sink(file,append = TRUE)
             print(datos$matrices)
             sink()
@@ -730,48 +886,48 @@ shinyServer(function(input, output, session) {
             datos$datos_corregir<-read.csv(input$archivo_corregir$datapath, sep = ",", header = FALSE)
             datatable(datos$datos_corregir, options = list(
                 language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json'),
-                pageLength = 5
+                pageLength = 5,
+                scrollX = TRUE,
+                searching = FALSE
             ))
         }
     })
     # Panel emergete para seleccionar las columnas para hacer el cálculo de correcciones
     output$col_datos_correccion<-renderUI(
-        expr = if (is.null(input$archivo_corregir)) {
+        expr = if (is.null(input$archivo_corregir) || length(input$proceso_local)==0 || is.null(datos$matrices)) {
             NULL
         } else {
             if(length(input$proceso_local)>1){
                 
-                fluidRow(h4("Selecciona las columnas para corrección"),
-                         selectInput("col_N_c", label = h4("Columna N(Norte)"),
-                                     choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[2]),
-                         selectInput("col_E_c", label = h4("Columna E(Este)"),
-                                     choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[3]),
-                         selectInput("col_h_c", label = h4("Columna h(Altura elipsoidal)"),
-                                     choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[4]),
-                         selectInput("col_Y_c", label = h4("Columna Y(Norte)"),
-                                     choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[5]),
-                         selectInput("col_X_c", label = h4("Columna X(Este)"),
-                                     choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[6]),
-                         actionButton("inicio_correccion_local",label = "Iniciar")
+                fluidRow(h4("Selecciona las columnas para corrección"), class="well",
+                         radioButtons("panel_correccion_multiple", label = "Selecciona la correción",
+                                      choiceNames = c("Horizontal","Vertical"),
+                                      choiceValues = c("horizontal","vertical")
+                                      ),
+                         uiOutput("panel_correccion_nuevo")
                 )
             }else if(input$proceso_local=="horizontal"){
                 fluidRow(h4("Selecciona las columnas para corrección"),
-                         selectInput("col_Y_c", label = h4("Columna Y(Norte)"),
+                         selectInput("col_nom_local", label = "Columna Punto",
+                                     choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[1]),
+                         selectInput("col_Y_c", label = "Columna Y(Norte)",
                                      choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[2]),
-                         selectInput("col_X_c", label = h4("Columna X(Este)"),
+                         selectInput("col_X_c", label = "Columna X(Este)",
                                      choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[3]),
-                         actionButton("inicio_correccion_local",label = "Iniciar")
+                         actionButton("inicio_correccion_local",label = "Iniciar", class = "btn-danger")
                 )
                 
             } else if (input$proceso_local=="vertical"){
                 fluidRow(h4("Selecciona las columnas para corrección"),
-                         selectInput("col_N_c", label = h4("Columna N(Norte)"),
+                         selectInput("col_nom_local", label = "Columna Punto",
+                                     choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[1]),
+                         selectInput("col_N_c", label = "Columna N(Norte)",
                                      choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[2]),
-                         selectInput("col_E_c", label = h4("Columna E(Este)"),
+                         selectInput("col_E_c", label = "Columna E(Este)",
                                      choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[3]),
-                         selectInput("col_h_c", label = h4("Columna h(Altura elipsoidal)"),
+                         selectInput("col_h_c", label = "Columna h(Altura elipsoidal)",
                                      choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[4]),
-                         actionButton("inicio_correccion_local",label = "Iniciar")
+                         actionButton("inicio_correccion_local",label = "Iniciar", class = "btn-danger")
                 )
             } else {
                 NULL
@@ -779,41 +935,566 @@ shinyServer(function(input, output, session) {
         }
     )
     
+    ### Panel emergente para corregir datos si el modelo fue múltiple
+    output$panel_correccion_nuevo<- renderUI(
+        expr = if(input$panel_correccion_multiple=="vertical"){
+            fluidRow(
+                column(10,
+                       selectInput("col_nom_local", label = "Columna Punto",
+                                   choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[1]),
+                       selectInput("col_N_c", label = "Columna N(Norte)",
+                                   choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[2]),
+                       selectInput("col_E_c", label = "Columna E(Este)",
+                                   choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[3]),
+                       selectInput("col_h_c", label = "Columna h(Altura elipsoidal)",
+                                   choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[4]),
+                       actionButton("inicio_correccion_local",label = "Iniciar", class = "btn-danger")
+                       )
+            )
+        } else if(input$panel_correccion_multiple=="horizontal"){
+            fluidRow(
+                column(10,
+                       selectInput("col_nom_local", label = "Columna Punto",
+                                   choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[1]),
+                       selectInput("col_Y_c", label = "Columna Y(Norte)",
+                                   choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[2]),
+                       selectInput("col_X_c", label = "Columna X(Este)",
+                                   choices = names(datos$datos_corregir), selected=names(datos$datos_corregir)[3]),
+                       actionButton("inicio_correccion_local",label = "Iniciar", class = "btn-danger")
+                       )
+            )
+        }
+    )
+    
     ######## Cálculo Ajuste local (Obtener nuevos valores corregidos)################
     
-    observeEvent(input$inicio_correccion_local,{
+    observeEvent(input$aceptar_calculo_local,{
         if(length(input$proceso_local)>1){
-            matriz_corregir<-datos$datos_corregir[,c(input$col_X_c, input$col_Y_c)]
-            matriz_resultados_correccion_H<-resultados(matriz_corregir,datos$matrices[[1]][[2]])
-            
-            matriz_corregir<-datos$datos_corregir[,c( input$col_E_c, input$col_N_c,input$col_h_c)]
-            matriz_resultados_correccion_V<-resultados_H(matriz_corregir,datos$matrices[[2]][[3]])
-            
-            
-            
-            matriz_resultados_HV<-list(matriz_resultados_correccion_H, matriz_resultados_correccion_V[[2]])
-            names(matriz_resultados_HV)<-c("Horizontal","Vertical")
-            
-            datos$datos_corregidos<-matriz_resultados_HV
+            if(input$panel_correccion_multiple=="horizontal"){
+                ## Restricción para evitar que los calculos se hagan con matrices no correspondientes
+                if(length(datos$matrices)==4){
+                    showNotification(
+                        h4("Error: Cambia el tipo de proceso o haz un nuevo cálculo"), 
+                        action = NULL, duration = 5, type = "warning")
+                    return()
+                }
+                matriz_corregir<-datos$datos_corregir[,c(input$col_X_c, input$col_Y_c)]
+                matriz_resultados_correccion<-resultados(matriz_corregir,datos$matrices[[1]][[2]])
+                datos$datos_corregidos<-matriz_resultados_correccion[,c(2,1)]
+                
+                removeModal()
+                
+            } else {
+                if(length(datos$matrices)==4){
+                    showNotification(
+                        h4("Error: Cambia el tipo de proceso o haz un nuevo cálculo"), 
+                        action = NULL, duration = 5, type = "warning")
+                    return()
+                }
+                matriz_corregir<-datos$datos_corregir[,c( input$col_N_c, input$col_E_c,input$col_h_c)]
+                matriz_resultados_correccion<-resultados_H(matriz_corregir,datos$matrices[[2]][[3]], datos$matrices[[2]][[2]])
+                datos$datos_corregidos<-cbind(matriz_resultados_correccion[[2]],matriz_resultados_correccion[[3]]) 
+                
+                removeModal()
+            }
             
         } else if (input$proceso_local=="horizontal"){
+            ## Restricción para evitar que los calculos se hagan con matrices no correspondientes
+            if(length(datos$matrices)==2 || length(which("V" %in% names(datos$matrices)))==0){
+                showNotification(
+                    h4("Error: Cambia el tipo de proceso o haz un nuevo cálculo"), 
+                    action = NULL, duration = 5, type = "warning")
+                return()
+            }
             matriz_corregir<-datos$datos_corregir[,c(input$col_X_c, input$col_Y_c)]
             matriz_resultados_correccion<-resultados(matriz_corregir,datos$matrices[[2]])
-            datos$datos_corregidos<-matriz_resultados_correccion
+            datos$datos_corregidos<-matriz_resultados_correccion[,c(2,1)]
             
+            removeModal()
         } else if(input$proceso_local=="vertical"){
+            ## Restricción para evitar que los calculos se hagan con matrices no correspondientes
+            if(length(datos$matrices)==2 || length(which("B" %in% names(datos$matrices)))==0){
+                showNotification(
+                    h4("Error: Cambia el tipo de proceso o haz un nuevo cálculo"), 
+                    action = NULL, duration = 5, type = "warning")
+                return()
+            }
             matriz_corregir<-datos$datos_corregir[,c( input$col_N_c, input$col_E_c,input$col_h_c)]
-            matriz_resultados_correccion<-resultados_H(matriz_corregir,datos$matrices[[3]])
-            datos$datos_corregidos<-matriz_resultados_correccion[[2]]
+            matriz_resultados_correccion<-resultados_H(matriz_corregir,datos$matrices[[3]], datos$matrices[[2]])
+            datos$datos_corregidos<-cbind(matriz_resultados_correccion[[2]],matriz_resultados_correccion[[3]])
+            
+            removeModal()
         }else{
             NULL
         }
     })
     
     
-    output$texto_corregido<-renderPrint({datos$datos_corregidos})
-
+    output$texto_corregido<-renderPrint({cbind(datos$datos_corregir[,input$col_nom_local],datos$datos_corregidos)})
     
+    ## Genera el panel inferior al momento de calcular nuevos datos
+    output$panel_emergente_resultados_local<- renderUI(
+        expr = if(is.null(datos$datos_corregidos)){
+            NULL
+        } else {
+            fluidRow(
+                column(10, verbatimTextOutput("texto_corregido"),
+                       downloadLink('descarga_local_resultado', 'Descargar resultados')
+                )
+                
+            ) 
+        }
+    )
+    
+    ## Descarga los nuevos datos del proceso local
+    output$descarga_local_resultado<-downloadHandler(
+        filename="resultados_proceso_local.csv",
+        content=function(file){
+            csv_resultados_local<- cbind(datos$datos_corregir[,input$col_nom_local],datos$datos_corregidos)
+            
+            write.csv(csv_resultados_local,file, row.names = FALSE)
+        }
+    )
+    
+############proceso UTM-PLANAS######################
+    ## Genera el panel de procesos al momento de cargar los datos
+    output$panel_utm_planas<- renderUI(expr = if (!is.null(input$archivoC)) {
+            
+        fluidPage(
+            sidebarPanel(width = 3,
+                         selectInput("crs", "CRS",
+                                     list("WGS84-UTM-12 Norte" = 32612, "WGS84-UTM-13 Norte" = 32613, "WGS84-UTM-14 Norte" = 32614,
+                                          "WGS84-UTM-15 Norte" = 32615, "WGS84-UTM-16 Norte" = 32616, "WGS84-UTM-17 Sur" = 32717,
+                                          "WGS84-UTM-18 Sur" = 32718, "WGS84-UTM-19 Sur" = 32719, "WGS84-UTM-20 Sur" = 32720
+                                     )
+                         ),
+                         selectInput("col_nombre_UTM", label = "Columna Punto",
+                                     choices = names(datos$puntos_coordenadasUTM), selected=names(datos$puntos_coordenadasUTM)[1]),
+                         selectInput("col_N_UTM", label = "Columna N(Norte)",
+                                     choices = names(datos$puntos_coordenadasUTM), selected=names(datos$puntos_coordenadasUTM)[2]),
+                         selectInput("col_E_UTM", label = "Columna E(Este)",
+                                     choices = names(datos$puntos_coordenadasUTM), selected=names(datos$puntos_coordenadasUTM)[3]),
+                         selectInput("col_h_UTM", label = "Columna h(Altura elipsoidal)",
+                                     choices = names(datos$puntos_coordenadasUTM), selected=names(datos$puntos_coordenadasUTM)[4]),
+                         actionButton("inicio_correccion_UTM",label = "Iniciar", class = "btn-info")
+            ),
+            mainPanel( class="well",
+                       h4("Selecciona un renglón en la tabla (Punto pivote)"),
+                       dataTableOutput("tabla_inicio_utm")
+            )
+        )   
+    } else {
+        NULL
+    })
+    
+    ## Geera la tabla al momento de cargar los datos
+    output$tabla_inicio_utm<- renderDataTable({
+        req(credenciales()$user_auth)
+        datos$puntos_coordenadasUTM<-read.csv(input$archivoC$datapath, sep = ",", header = FALSE)
+        datatable(datos$puntos_coordenadasUTM, options = list(
+            language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json'),
+            pageLength = 5,
+            scrollX = TRUE,
+            searching = FALSE
+        ), selection='single')
+    })
+    
+    ####### Realiza el ajuste de UTM planas
+    observeEvent(input$aceptar_proceso_utm,{
+        
+        
+        # Restricciones
+        if(length(input$tabla_inicio_utm_rows_selected)==0){
+            showNotification(
+                h4("Selecciona un renglón correspondiente con el punto pivote"), 
+                action = NULL, duration = 5, type = "warning")
+            
+            removeModal()
+            return()
+        }
+        
+        datos$datos_utm_ordenados<-rbind(datos$puntos_coordenadasUTM[input$tabla_inicio_utm_rows_selected,], datos$puntos_coordenadasUTM[-input$tabla_inicio_utm_rows_selected,])
+        datos_utm<-datos$datos_utm_ordenados[,c(input$col_nombre_UTM,input$col_E_UTM, input$col_N_UTM,input$col_h_UTM)]
+        names(datos_utm)<-c("Punto","E","N","q")
+        
+        #Restricciones
+        if(class(datos_utm$N)!="numeric" && class(datos_utm$E)!="numeric" &&
+           class(datos_utm$q)!="numeric"){
+            
+            showModal(modalDialog(title = "Error",
+                                  h4("Error: Tus columnas no son de tipo número: a)Asugurate de que tus columnas sean de tipo número
+                             b) Asegurate de que tus tablas no tengan un encabezado"
+                                  ),
+                                  size = "m",
+                                  easyClose = TRUE
+            ))
+            return()
+        }
+        
+        
+        datos$correccion_utm<-funcion_UTM_planas(datos_utm[,-1], as.numeric(input$crs))%>%select(-Acimut_rad,-acimut_grad)
+        
+        removeModal()
+    })
+    
+    output$tabla_utm_corregido<- renderDataTable({
+        
+        datos$datos_utm_ordenados<-rbind(datos$puntos_coordenadasUTM[input$tabla_inicio_utm_rows_selected,], datos$puntos_coordenadasUTM[-input$tabla_inicio_utm_rows_selected,])
+        datos_utm<-datos$datos_utm_ordenados[,c(input$col_nombre_UTM,input$col_E_UTM, input$col_N_UTM,input$col_h_UTM)]
+        names(datos_utm)<-c("Punto","N","E","h")
+        datos_tabla_UTM<-cbind(datos_utm,datos$correccion_utm)
+        
+        datatable(datos_tabla_UTM, options = list(
+            language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json'),
+            pageLength = 5,
+            scrollX = TRUE,
+            searching = FALSE
+        ))
+    })
+    ## Genera un nuevo panel donde se muestran los resultaos del ajuste
+    output$panel_resultados<-renderUI(expr = if(!is.null(datos$correccion_utm)){
+        fluidRow(
+            column( 10, class="well",
+                h3("Resultados"),
+                dataTableOutput("tabla_utm_corregido"),
+                downloadLink('descarga_utm_correccion', 'Descargar resultados')
+            )
+        )
+    } else{
+        NULL
+    })
+    
+    ## Descarga los resultados del proceso UTM-planas
+    output$descarga_utm_correccion<-downloadHandler(
+        filename="resultados_proceso_UTM-planas.csv",
+        content=function(file){
+            csv_resultados_local<- cbind(datos$datos_utm_ordenados,datos$correccion_utm[,c("k_esc","K_ele", "K_com", "N_top","E_top")])
+            
+            write.csv(csv_resultados_local,file, row.names = FALSE, col.names=FALSE)
+        }
+    )
+    
+    
+    ##################### Mapa ########################
+    ## Genera la ventana del mapa cuando los datos fueron creados correctamente
+    output$panel_mapa<-renderUI(
+        expr = if(is.null(datos$mapa_datos_input) && is.null(datos$mapa_datos_resultados)){
+            NULL
+        } else {
+            leafletOutput("mapa")
+        }
+    )
+    ## Crea el mapa
+    output$mapa<- renderLeaflet({
+        mapa<-leaflet() %>%
+            addProviderTiles(providers$OpenStreetMap.Mapnik, group = "OpenStreetMap.Mapnik") %>%
+            addProviderTiles(providers$Esri.WorldImagery, group = "Esri.WorldImagery") %>%
+            addLayersControl(
+                baseGroups = c("OpenStreetMap.Mapnik","Esri.WorldImagery"),
+                overlayGroups = c("Puntos de control", "Resultados")
+            )%>%
+            addCircleMarkers(data=datos$mapa_datos_input, color = "red", group = "Puntos de control",
+                             label = ~as.character(datos$mapa_datos_input[,3]))%>%
+            addCircleMarkers(data=datos$mapa_datos_resultados, color="blue", group = "Resultados",
+                             label = ~as.character(datos$mapa_datos_input[,3]))
+        
+        mapa
+    })
+    
+    # Genera el panel para crear el mapa de los datos de la corrección UTM
+    output$panel_mapa_UTM<- renderUI(
+        expr = if(is.null(datos$correccion_utm)){
+            NULL
+        } else {
+            fluidRow(
+                column(10,
+                       h3("Datos del proceso UTM-Planas"),
+                       selectInput("crs_mapa_UTM", "Selecciona un sistema de referencia; Asegurate de que se al mismo que usaste en los procesos",
+                                   list("WGS84-UTM-12 Norte" = 32612, "WGS84-UTM-13 Norte" = 32613, "WGS84-UTM-14 Norte" = 32614,
+                                        "WGS84-UTM-15 Norte" = 32615, "WGS84-UTM-16 Norte" = 32616, "WGS84-UTM-17 Sur" = 32717,
+                                        "WGS84-UTM-18 Sur" = 32718, "WGS84-UTM-19 Sur" = 32719, "WGS84-UTM-20 Sur" = 32720
+                                   )
+                       ),
+                       actionButton("crear_mapa_utm","Iniciar")
+                )
+            )
+        }
+    )
+    
+    observeEvent(input$crear_mapa_utm,{
+        datos_utm<-datos$datos_utm_ordenados[,c(input$col_nombre_UTM,input$col_E_UTM, input$col_N_UTM,input$col_h_UTM)]
+        names(datos_utm)<-c("Punto","N","E","h")
+        ## Restricciones
+        if(class(datos_utm$N)!="numeric" || class(datos_utm$E)!="numeric" || class(datos_utm$h)!="numeric"){
+            showNotification(
+                h4("Las columnas que seleccionaste en el proceso no son numéricas"), 
+                action = NULL, duration = 5, type = "warning")
+            return()
+        }
+        datos_mapa_UTM<-cbind(datos_utm,datos$correccion_utm)
+        sf_datos_locales<-st_as_sf(datos_mapa_UTM, coords=c("Long","Lat"), crs=4326)
+        
+        datos$mapa_datos_input<-sf_datos_locales
+        
+        sf_datos_resultados<-st_as_sf(datos_mapa_UTM, coords=c("E_top","N_top"), crs=as.numeric(input$crs_mapa_UTM))
+        sf_datos_resultados<-st_transform(sf_datos_resultados, 4326)
+        
+        datos$mapa_datos_resultados<-sf_datos_resultados
+        
+    })
+    
+    # Genera el panel para crear el mapa de los datos de la corrección local
+    output$panel_mapa_local<- renderUI(
+        expr = if(is.null(datos$datos_corregidos)){
+            NULL
+        } else {
+            fluidRow(
+                column(10,
+                       h3("Datos del proceso local"),
+                       selectInput("crs_mapa_local", "Selecciona un sistema de referencia de coordenadas",
+                                   list("WGS84-UTM-12 Norte" = 32612, "WGS84-UTM-13 Norte" = 32613, "WGS84-UTM-14 Norte" = 32614,
+                                        "WGS84-UTM-15 Norte" = 32615, "WGS84-UTM-16 Norte" = 32616, "WGS84-UTM-17 Sur" = 32717,
+                                        "WGS84-UTM-18 Sur" = 32718, "WGS84-UTM-19 Sur" = 32719, "WGS84-UTM-20 Sur" = 32720
+                                   )
+                       ),
+                       actionButton("crear_mapa_local","Iniciar")
+                       )
+            )
+        }
+    )
+    
+    observeEvent(input$crear_mapa_local,{
+        resultados_utm<-cbind(datos$datos_corregir[,input$col_nom_local],datos$datos_corregidos)
+        resultados_utm[,2]<-as.numeric(resultados_utm[,2])
+        resultados_utm[,3]<-as.numeric(resultados_utm[,3])
+        resultados_utm_sf<-resultados_utm %>%as.data.frame%>%st_as_sf(coords=c(2,3), crs= as.numeric(input$crs_mapa_local))
+        resultados_utm_sf<- st_transform(resultados_utm_sf, 4326)
+        
+        datos$mapa_datos_resultados<-resultados_utm_sf
+        
+        ## Restricciones
+        if(class(datos$datos_match[,c(input$col_E)])!="numeric" || class(datos$datos_match[,c(input$col_N)])!="numeric" ){
+            showNotification(
+                h4("Las columnas que seleccionaste en el proceso no son numéricas"), 
+                action = NULL, duration = 5, type = "warning")
+            return()
+        }
+        match_sf<-st_as_sf(datos$datos_match, coords=c(input$col_E, input$col_N), crs=as.numeric(input$crs_mapa_local))
+        match_sf<-st_transform(match_sf, 4326)
+        
+        datos$mapa_datos_input<-match_sf
+    })
+    
+    
+    
+    ###########################################Guarda los datos en la base de datos####################
+    
+    observeEvent(input$inicio_ajuste_local,{
+        showModal(modalDialog(title="Guardar",
+                              fluidRow(h4("Asgurate de haber elegido los nombres de las coordenadas correctamente antes de continuar")),
+                              footer = tagList(
+                                  actionButton("cancelar","Cancelar"),
+                                  actionButton("aceptar_proceso_local","Continuar")
+                              )
+                              ))
+    })
+    
+    observeEvent(input$aceptar_proceso_local,{
+        if(length(input$proceso_local)>1){
+            guardar_match<-datos$datos_match[,c(input$col_N, input$col_E, input$col_h,input$col_Y, input$col_X,input$col_H)]
+            names(guardar_match)<-c("n","e","he","y","x","ho")
+            ### Restricciones
+            if(class(guardar_match$n)!="numeric" || class(guardar_match$e)!="numeric" || class(guardar_match$he)!="numeric" ||
+               class(guardar_match$y)!="numeric" || class(guardar_match$x)!="numeric" || class(guardar_match$ho)!="numeric"){
+                showNotification(
+                    h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
+                    action = NULL, duration = 5, type = "warning")
+                return()
+            }
+        }else if(input$proceso_local%in%"horizontal"){
+            guardar_match<-datos$datos_match[,c(input$col_N, input$col_E, input$col_Y, input$col_X)]
+            names(guardar_match)<-c("n","e","y","x")
+            ### Restricciones
+            if(class(guardar_match$n)!="numeric" || class(guardar_match$e)!="numeric" || 
+               class(guardar_match$y)!="numeric" || class(guardar_match$x)!="numeric"){
+                showNotification(
+                    h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
+                    action = NULL, duration = 5, type = "warning")
+                return()
+            }
+        } else if(input$proceso_local%in%"vertical"){
+            guardar_match<-datos$datos_match[,c(input$col_N, input$col_E, input$col_h, input$col_H)]
+            names(guardar_match)<-c("n","e","he","ho")
+            ### Restricciones
+            if(class(guardar_match$n)!="numeric" || class(guardar_match$e)!="numeric" || class(guardar_match$he)!="numeric" ||
+               class(guardar_match$ho)!="numeric"){
+                showNotification(
+                    h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
+                    action = NULL, duration = 5, type = "warning")
+                return()
+            }
+        } else {
+            NULL
+        }
+        
+        user_id<-data.frame(user_id=rep(user_data()$user_id,length(datos$datos_match[,1])))
+        fecha<-data.frame(fecha=rep(Sys.Date(),length(datos$datos_match[,1])))
+        ##Restricciones
+        if(class(datos$datos_match[,1])!="character"){
+            showNotification(
+                h4("Las columnas nombre de puto no es caracter: No se guardaran los datos"), 
+                action = NULL, duration = 5, type = "warning")
+            return()
+        }
+        punto<-datos$datos_match[,1]
+        
+        guardar_datos<-cbind(user_id,fecha,punto,guardar_match)
+        guardar_datos$fecha<-as.character(guardar_datos$fecha)
+        query_agregar<-sqlAppendTable(conexion_base, 'puntos_control_local',guardar_datos )
+        
+        dbGetQuery(conexion_base,query_agregar)
+        
+        
+        showNotification(
+            h4("Datos guardados con éxito"), 
+            action = NULL, duration = 5, type = "message")
+        
+    })
+    
+    ## Guarda la tabla de carga de nuevos datos
+    observeEvent(input$inicio_correccion_local,{
+        showModal(modalDialog(title="Guardar",
+                              fluidRow(h4("Asgurate de haber elegido los nombres de las coordenadas correctamente antes de continuar")),
+                              footer = tagList(
+                                  actionButton("cancelar","Cancelar"),
+                                  actionButton("aceptar_calculo_local","Continuar")
+                              )
+        ))
+    })
+    
+    observeEvent(input$aceptar_calculo_local,{
+        if(length(input$proceso_local)>1){
+            
+            if(input$panel_correccion_multiple%in%"horizontal"){
+                guardar_match<-datos$datos_corregir[,c(input$col_Y_c, input$col_X_c)]
+                names(guardar_match)<-c("y","x")
+                ### Restricciones
+                if(class(guardar_match$y)!="numeric" || class(guardar_match$x)!="numeric"){
+                    showNotification(
+                        h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
+                        action = NULL, duration = 5, type = "warning")
+                    return()
+                }
+                
+            }else if(input$panel_correccion_multiple%in%"vertical"){
+                guardar_match<-datos$datos_corregir[,c(input$col_N_c, input$col_E_c, input$col_h_c)]
+                names(guardar_match)<-c("n","e","he") 
+                ### Restricciones
+                if(class(guardar_match$n)!="numeric" || class(guardar_match$e)!="numeric" || 
+                   class(guardar_match$he)!="numeric" ){
+                    showNotification(
+                        h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
+                        action = NULL, duration = 5, type = "warning")
+                    return()
+                }
+            } else { 
+                NULL
+                }
+        }else if(input$proceso_local%in%"horizontal"){
+            guardar_match<-datos$datos_corregir[,c(input$col_Y_c, input$col_X_c)]
+            names(guardar_match)<-c("y","x")
+            ### Restricciones
+            if(class(guardar_match$y)!="numeric" || class(guardar_match$x)!="numeric"){
+                showNotification(
+                    h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
+                    action = NULL, duration = 5, type = "warning")
+                return()
+            }
+        } else if(input$proceso_local%in%"vertical"){
+            guardar_match<-datos$datos_corregir[,c(input$col_N_c, input$col_E_c, input$col_h_c)]
+            names(guardar_match)<-c("n","e","he")
+            ### Restricciones
+            if(class(guardar_match$n)!="numeric" || class(guardar_match$e)!="numeric" || 
+               class(guardar_match$he)!="numeric"){
+                showNotification(
+                    h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
+                    action = NULL, duration = 5, type = "warning")
+                return()
+            }
+        } else {
+            NULL
+        }
+        
+        user_id<-data.frame(user_id=rep(user_data()$user_id,length(datos$datos_corregir[,1])))
+        fecha<-data.frame(fecha=rep(Sys.Date(),length(datos$datos_corregir[,1])))
+        ##Restricciones
+        if(class(datos$datos_corregir[,c(input$col_nom_local)])!="character"){
+            showNotification(
+                h4("La columna nombre de puto no es caracter: No se guardaran los datos"), 
+                action = NULL, duration = 5, type = "warning")
+            return()
+        }
+        punto<-datos$datos_corregir[,c(input$col_nom_local)]
+        
+        guardar_datos<-cbind(user_id,fecha,punto,guardar_match)
+        guardar_datos$fecha<-as.character(guardar_datos$fecha)
+        query_agregar<-sqlAppendTable(conexion_base, 'puntos_carga_local',guardar_datos)
+        
+        dbGetQuery(conexion_base,query_agregar)
+        
+        showNotification(
+            h4("Datos guardados con éxito"), 
+            action = NULL, duration = 5, type = "message")
+    })
+    
+    ### Guarda los datos UTM
+    observeEvent(input$inicio_correccion_UTM,{
+        showModal(modalDialog(title="Guardar",
+                              fluidRow(h4("Asgurate de haber elegido los nombres de las coordenadas correctamente antes de continuar")),
+                              footer = tagList(
+                                  actionButton("cancelar","Cancelar"),
+                                  actionButton("aceptar_proceso_utm","Continuar")
+                              )
+        )) 
+    })
+    
+    observeEvent(input$aceptar_proceso_utm,{
+        # Restricciones
+        if(length(input$tabla_inicio_utm_rows_selected)==0){
+            showNotification(
+                h4("Selecciona un renglón correspondiente con el punto pivote"), 
+                action = NULL, duration = 5, type = "warning")
+            
+            removeModal()
+            return()
+        }
+        guardar_input<-datos$puntos_coordenadasUTM[,c(input$col_nombre_UTM, input$col_N_UTM, input$col_E_UTM, input$col_h_UTM)]
+        names(guardar_input)<-c("punto","n","e", "he")
+        ### Restricciones
+        if(class(guardar_input$n)!="numeric" || class(guardar_input$e)!="numeric" || 
+           class(guardar_input$e)!="numeric" || class(guardar_input$punto)!="character"){
+            showNotification(
+                h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
+                action = NULL, duration = 5, type = "warning")
+            return()
+        }
+        
+        user_id<-data.frame(user_id=rep(user_data()$user_id,length(datos$puntos_coordenadasUTM[,1])))
+        fecha<-data.frame(fecha=rep(Sys.Date(),length(datos$puntos_coordenadasUTM[,1])))
+        
+        guardar_datos<-cbind(user_id, fecha, guardar_input)
+        
+        guardar_datos$fecha<-as.character(guardar_datos$fecha)
+        query_agregar<-sqlAppendTable(conexion_base, 'puntos_utm',guardar_datos)
+        
+        dbGetQuery(conexion_base,query_agregar)
+        
+        
+        showNotification(
+            h4("Datos guardados con éxito"), 
+            action = NULL, duration = 5, type = "message")
+        
+    })
     
     
 })
