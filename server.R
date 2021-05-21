@@ -9,10 +9,51 @@ library(RPostgreSQL)
 library(DBI)
 library(pool)
 library(sf)
-library(nngeo)
 library(leaflet)
 ### Comentario
 #La tabla user_table muestra la información de cada usuario
+
+## Función que calcula azimuth entre puntos
+st_azimuth = function(x, y) {
+    
+    # Checks
+    stopifnot(all(st_is(x, "POINT")))
+    stopifnot(all(st_is(y, "POINT")))
+    
+    # Extract geometry
+    x = st_geometry(x)
+    y = st_geometry(y)
+    
+    # Recycle 'x' or 'y' if necessary
+    if(length(x) < length(y)) {
+        ids = rep(1:length(x), length.out = length(y))
+        x = x[ids]
+    }
+    if(length(y) < length(x)) {
+        ids = rep(1:length(y), length.out = length(x))
+        y = y[ids]
+    }
+    
+    # Get coordinate matrices
+    x_coords = st_coordinates(x)
+    y_coords = st_coordinates(y)
+    
+    # Calculate azimuths
+    x1 = x_coords[, 1]
+    y1 = x_coords[, 2]
+    x2 = y_coords[, 1]
+    y2 = y_coords[, 2]
+    az = (180 / pi) * atan2(x2 - x1, y2 - y1)
+    names(az) = NULL
+    az[az < 0] = az[az < 0] + 360
+    
+    # Replace with 'NA' for identical points
+    az[x1 == x2 & y1 == y2] = NA
+    
+    # Return
+    return(az)
+    
+}
 
 options(digits=12, scipen=999)
 # Funciones matriciales
@@ -92,30 +133,30 @@ crear_B <- function(x,h){
     
 }
 ### Recibe la matriz E,N,h y devuelve el vector ondulación geoidal y H 
-resultados_H <- function(x, mat_b, matriz_y){
+resultados_H <- function(x, mat_b){
     ondulacion <- matrix(nrow = nrow(x), ncol = 1)
     for (i in 1:nrow(x)) {
         ondulacion[i, 1] <- mat_b[1,1]+mat_b[2,1]*x[i,1]+mat_b[3,1]*x[i,2]
         
     }
     
-    matriz_h <- matrix(nrow = nrow(x), ncol = 1)
+    h <- matrix(nrow = nrow(x), ncol = 1)
     
     for (i in 1:nrow(x)) {
-        matriz_h[i,1] <- x[i,3]-ondulacion[i,1]
-    }
-    
-    promedio <- mean(matriz_y)
-    
-    matriz_2 <- matrix(nrow = nrow(x), ncol = 1)
-    for (i in 1:nrow(x)) {
-        matriz_2[i,1] <- (ondulacion[i,1]-promedio)^2
+        h[i,1] <- x[i,3]
         
     }
     
-    matrices<-list(ondulacion, matriz_h, matriz_2)
+    matriz_h <- matrix(nrow = nrow(x), ncol = 1)
+    
+    for (i in 1:nrow(x)) {
+        matriz_h[i,1] <- h[i,1]-ondulacion[i,1]
+    }
+    
+    resultados_f<-list(ondulacion, matriz_h)
+    
+    return(resultados_f)
 }
-
 
 
 ##### función para el ajuste UTM_plano
@@ -805,10 +846,10 @@ shinyServer(function(input, output, session) {
             }
             
             matriz_resultados_H<-crear_X(matriz_coordenadas_H[,c(3,4,1,2)])
-            names(matriz_resultados_H)<-c("A","X","L","V")
+            names(matriz_resultados_H)<-c("Matriz_A","Parámetros","Vector_L","Vector_residuos")
             
             matriz_resultados_V<-crear_B(matriz_coordenadas_V)
-            names(matriz_resultados_V)<-c("X","Y","B")
+            names(matriz_resultados_V)<-c("Parámetros","Vector_Y","Vector_B")
             
             matriz_resultados_HV<-list(matriz_resultados_H, matriz_resultados_V)
             names(matriz_resultados_HV)<-c("Horizontal","Vertical")
@@ -834,7 +875,7 @@ shinyServer(function(input, output, session) {
             }
             
             matriz_resultados<-crear_X(matriz_coordenadas[,c(3,4,1,2)])
-            names(matriz_resultados)<-c("A","X","L","V")
+            names(matriz_resultados)<-c("Matriz_A","Parámetros","Vector_L","Vector_residuos") ##A,X, L, V
             datos$matrices<-matriz_resultados
         } else if(input$proceso_local=="vertical"){
             matriz_coordenadas<-datos$datos_match[,c(input$col_N, input$col_E,input$col_H, input$col_h)]
@@ -855,7 +896,7 @@ shinyServer(function(input, output, session) {
             }
             
             matriz_resultados<-crear_B(matriz_coordenadas)
-            names(matriz_resultados)<-c("X","Y","B")
+            names(matriz_resultados)<-c("Parámetros","Vector_Y","Vector_B")
             datos$matrices<-matriz_resultados
         }else{
             NULL
@@ -992,8 +1033,8 @@ shinyServer(function(input, output, session) {
                     return()
                 }
                 matriz_corregir<-datos$datos_corregir[,c( input$col_N_c, input$col_E_c,input$col_h_c)]
-                matriz_resultados_correccion<-resultados_H(matriz_corregir,datos$matrices[[2]][[3]], datos$matrices[[2]][[2]])
-                datos$datos_corregidos<-cbind(matriz_resultados_correccion[[2]],matriz_resultados_correccion[[3]]) 
+                matriz_resultados_correccion<-resultados_H(matriz_corregir,datos$matrices[[2]][[3]])
+                datos$datos_corregidos<-matriz_resultados_correccion[[2]] 
                 
                 removeModal()
             }
@@ -1020,8 +1061,8 @@ shinyServer(function(input, output, session) {
                 return()
             }
             matriz_corregir<-datos$datos_corregir[,c( input$col_N_c, input$col_E_c,input$col_h_c)]
-            matriz_resultados_correccion<-resultados_H(matriz_corregir,datos$matrices[[3]], datos$matrices[[2]])
-            datos$datos_corregidos<-cbind(matriz_resultados_correccion[[2]],matriz_resultados_correccion[[3]])
+            matriz_resultados_correccion<-resultados_H(matriz_corregir,datos$matrices[[3]])
+            datos$datos_corregidos<-matriz_resultados_correccion[[2]]
             
             removeModal()
         }else{
