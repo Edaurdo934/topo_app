@@ -863,10 +863,10 @@ shinyServer(function(input, output, session) {
             }
             
             matriz_resultados_H<-crear_X(matriz_coordenadas_H[,c(3,4,1,2)])
-            names(matriz_resultados_H)<-c("Matriz_A","Parámetros","Vector_L","Vector_residuos")
+            names(matriz_resultados_H)<-c("Matriz A","Parámetros","Vector L","Vector residuos")
             
             matriz_resultados_V<-crear_B(matriz_coordenadas_V)
-            names(matriz_resultados_V)<-c("Parámetros","Vector_Y","Vector_B")
+            names(matriz_resultados_V)<-c("Matriz A","Vector Y","Parámetros")
             
             matriz_resultados_HV<-list(matriz_resultados_H, matriz_resultados_V)
             names(matriz_resultados_HV)<-c("Horizontal","Vertical")
@@ -892,7 +892,7 @@ shinyServer(function(input, output, session) {
             }
             
             matriz_resultados<-crear_X(matriz_coordenadas[,c(3,4,1,2)])
-            names(matriz_resultados)<-c("Matriz_A","Parámetros","Vector_L","Vector_residuos") ##A,X, L, V
+            names(matriz_resultados)<-c("Matriz A","Parámetros","Vector L","Vector residuos") ##A,X, L, V
             datos$matrices<-matriz_resultados
         } else if(input$proceso_local=="vertical"){
             matriz_coordenadas<-datos$datos_match[,c(input$col_N, input$col_E,input$col_H, input$col_h)]
@@ -913,7 +913,7 @@ shinyServer(function(input, output, session) {
             }
             
             matriz_resultados<-crear_B(matriz_coordenadas)
-            names(matriz_resultados)<-c("Parámetros","Vector_Y","Vector_B")
+            names(matriz_resultados)<-c("Matriz A","Vector Y","Parámetros")
             datos$matrices<-matriz_resultados
         }else{
             NULL
@@ -1030,7 +1030,7 @@ shinyServer(function(input, output, session) {
         if(length(input$proceso_local)>1){
             if(input$panel_correccion_multiple=="horizontal"){
                 ## Restricción para evitar que los calculos se hagan con matrices no correspondientes
-                if(length(datos$matrices)==4){
+                if(length(datos$matrices)!=2){
                     showNotification(
                         h4("Error: Cambia el tipo de proceso o haz un nuevo cálculo"), 
                         action = NULL, duration = 5, type = "warning")
@@ -1058,7 +1058,7 @@ shinyServer(function(input, output, session) {
             
         } else if (input$proceso_local=="horizontal"){
             ## Restricción para evitar que los calculos se hagan con matrices no correspondientes
-            if(length(datos$matrices)==2 || length(which("V" %in% names(datos$matrices)))==0){
+            if(length(datos$matrices)==2 || length(which("Vector L" %in% names(datos$matrices)))==0){
                 showNotification(
                     h4("Error: Cambia el tipo de proceso o haz un nuevo cálculo"), 
                     action = NULL, duration = 5, type = "warning")
@@ -1071,7 +1071,7 @@ shinyServer(function(input, output, session) {
             removeModal()
         } else if(input$proceso_local=="vertical"){
             ## Restricción para evitar que los calculos se hagan con matrices no correspondientes
-            if(length(datos$matrices)==2 || length(which("B" %in% names(datos$matrices)))==0){
+            if(length(datos$matrices)==2 || length(which("Vector Y" %in% names(datos$matrices)))==0){
                 showNotification(
                     h4("Error: Cambia el tipo de proceso o haz un nuevo cálculo"), 
                     action = NULL, duration = 5, type = "warning")
@@ -1088,7 +1088,7 @@ shinyServer(function(input, output, session) {
     })
     
     
-    output$texto_corregido<-renderPrint({cbind(datos$datos_corregir[,input$col_nom_local],datos$datos_corregidos)})
+    output$texto_corregido<-renderPrint({cbind(datos$datos_corregir[,c(as.character(input$col_nom_local))],datos$datos_corregidos)})
     
     ## Genera el panel inferior al momento de calcular nuevos datos
     output$panel_emergente_resultados_local<- renderUI(
