@@ -377,6 +377,23 @@ shinyServer(function(input, output, session) {
         
     })
     
+    ## Si el usuario no tiene permisos, la aplicación no se abrirá correctamente
+    onclick("login-button",{
+        if(credenciales()$user_auth==TRUE && user_data()$acceso==FALSE){
+            showModal(
+                modalDialog(title = "Error",
+                            fluidRow(
+                                column(10,
+                                       h4("Lo sentimos tu subscripción ha terminado, por favor contacta al administrador")
+                                       )
+                            )
+                            )
+            )   
+        } else{
+            NULL
+        }
+    })
+    
     # Info de la sesión: tabla con los usuairios, sesiones, permisos, etc.
     user_data <- reactive({
         credenciales()$info
@@ -1159,8 +1176,8 @@ shinyServer(function(input, output, session) {
         names(datos_utm)<-c("Punto","E","N","q")
         
         #Restricciones
-        if(class(datos_utm$N)!="numeric" && class(datos_utm$E)!="numeric" &&
-           class(datos_utm$q)!="numeric"){
+        if(class(datos_utm[,3])!="numeric" && class(datos_utm[,2])!="numeric" &&
+           class(datos_utm[,4])!="numeric"){
             
             showModal(modalDialog(title = "Error",
                                   h4("Error: Tus columnas no son de tipo número: a)Asugurate de que tus columnas sean de tipo número
@@ -1342,10 +1359,9 @@ shinyServer(function(input, output, session) {
     observeEvent(input$aceptar_proceso_local,{
         if(length(input$proceso_local)>1){
             guardar_match<-datos$datos_match[,c(input$col_N, input$col_E, input$col_h,input$col_Y, input$col_X,input$col_H)]
-            names(guardar_match)<-c("n","e","he","y","x","ho")
             ### Restricciones
-            if(class(guardar_match$n)!="numeric" || class(guardar_match$e)!="numeric" || class(guardar_match$he)!="numeric" ||
-               class(guardar_match$y)!="numeric" || class(guardar_match$x)!="numeric" || class(guardar_match$ho)!="numeric"){
+            if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric" || class(guardar_match[,3])!="numeric" ||
+               class(guardar_match[,4])!="numeric" || class(guardar_match[,5])!="numeric" || class(guardar_match[,6])!="numeric"){
                 showNotification(
                     h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
                     action = NULL, duration = 5, type = "warning")
@@ -1353,10 +1369,9 @@ shinyServer(function(input, output, session) {
             }
         }else if(input$proceso_local%in%"horizontal"){
             guardar_match<-datos$datos_match[,c(input$col_N, input$col_E, input$col_Y, input$col_X)]
-            names(guardar_match)<-c("n","e","y","x")
             ### Restricciones
-            if(class(guardar_match$n)!="numeric" || class(guardar_match$e)!="numeric" || 
-               class(guardar_match$y)!="numeric" || class(guardar_match$x)!="numeric"){
+            if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric" || 
+               class(guardar_match[,3])!="numeric" || class(guardar_match[,4])!="numeric"){
                 showNotification(
                     h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
                     action = NULL, duration = 5, type = "warning")
@@ -1364,10 +1379,9 @@ shinyServer(function(input, output, session) {
             }
         } else if(input$proceso_local%in%"vertical"){
             guardar_match<-datos$datos_match[,c(input$col_N, input$col_E, input$col_h, input$col_H)]
-            names(guardar_match)<-c("n","e","he","ho")
             ### Restricciones
-            if(class(guardar_match$n)!="numeric" || class(guardar_match$e)!="numeric" || class(guardar_match$he)!="numeric" ||
-               class(guardar_match$ho)!="numeric"){
+            if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric" || class(guardar_match[,3])!="numeric" ||
+               class(guardar_match[,4])!="numeric"){
                 showNotification(
                     h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
                     action = NULL, duration = 5, type = "warning")
@@ -1417,9 +1431,8 @@ shinyServer(function(input, output, session) {
             
             if(input$panel_correccion_multiple%in%"horizontal"){
                 guardar_match<-datos$datos_corregir[,c(input$col_Y_c, input$col_X_c)]
-                names(guardar_match)<-c("y","x")
                 ### Restricciones
-                if(class(guardar_match$y)!="numeric" || class(guardar_match$x)!="numeric"){
+                if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric"){
                     showNotification(
                         h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
                         action = NULL, duration = 5, type = "warning")
@@ -1428,10 +1441,9 @@ shinyServer(function(input, output, session) {
                 
             }else if(input$panel_correccion_multiple%in%"vertical"){
                 guardar_match<-datos$datos_corregir[,c(input$col_N_c, input$col_E_c, input$col_h_c)]
-                names(guardar_match)<-c("n","e","he") 
                 ### Restricciones
-                if(class(guardar_match$n)!="numeric" || class(guardar_match$e)!="numeric" || 
-                   class(guardar_match$he)!="numeric" ){
+                if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric" || 
+                   class(guardar_match[,3])!="numeric" ){
                     showNotification(
                         h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
                         action = NULL, duration = 5, type = "warning")
@@ -1442,9 +1454,8 @@ shinyServer(function(input, output, session) {
                 }
         }else if(input$proceso_local%in%"horizontal"){
             guardar_match<-datos$datos_corregir[,c(input$col_Y_c, input$col_X_c)]
-            names(guardar_match)<-c("y","x")
             ### Restricciones
-            if(class(guardar_match$y)!="numeric" || class(guardar_match$x)!="numeric"){
+            if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric"){
                 showNotification(
                     h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
                     action = NULL, duration = 5, type = "warning")
@@ -1452,10 +1463,9 @@ shinyServer(function(input, output, session) {
             }
         } else if(input$proceso_local%in%"vertical"){
             guardar_match<-datos$datos_corregir[,c(input$col_N_c, input$col_E_c, input$col_h_c)]
-            names(guardar_match)<-c("n","e","he")
             ### Restricciones
-            if(class(guardar_match$n)!="numeric" || class(guardar_match$e)!="numeric" || 
-               class(guardar_match$he)!="numeric"){
+            if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric" || 
+               class(guardar_match[,3])!="numeric"){
                 showNotification(
                     h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
                     action = NULL, duration = 5, type = "warning")
@@ -1509,10 +1519,9 @@ shinyServer(function(input, output, session) {
             return()
         }
         guardar_input<-datos$puntos_coordenadasUTM[,c(input$col_nombre_UTM, input$col_N_UTM, input$col_E_UTM, input$col_h_UTM)]
-        names(guardar_input)<-c("punto","n","e", "he")
         ### Restricciones
-        if(class(guardar_input$n)!="numeric" || class(guardar_input$e)!="numeric" || 
-           class(guardar_input$e)!="numeric" || class(guardar_input$punto)!="character"){
+        if(class(guardar_input[,2])!="numeric" || class(guardar_input[,3])!="numeric" || 
+           class(guardar_input[,4])!="numeric" || class(guardar_input[,1])!="character"){
             showNotification(
                 h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
                 action = NULL, duration = 5, type = "warning")
