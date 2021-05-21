@@ -1264,9 +1264,8 @@ shinyServer(function(input, output, session) {
     
     observeEvent(input$crear_mapa_utm,{
         datos_utm<-datos$datos_utm_ordenados[,c(input$col_nombre_UTM,input$col_E_UTM, input$col_N_UTM,input$col_h_UTM)]
-        names(datos_utm)<-c("Punto","N","E","h")
         ## Restricciones
-        if(class(datos_utm$N)!="numeric" || class(datos_utm$E)!="numeric" || class(datos_utm$h)!="numeric"){
+        if(class(datos_utm[,2])!="numeric" || class(datos_utm[,3])!="numeric" || class(datos_utm[,4])!="numeric"){
             showNotification(
                 h4("Las columnas que seleccionaste en el proceso no son numéricas"), 
                 action = NULL, duration = 5, type = "warning")
