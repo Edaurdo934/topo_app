@@ -1171,12 +1171,13 @@ shinyServer(function(input, output, session) {
             return()
         }
         
+        
         datos$datos_utm_ordenados<-rbind(datos$puntos_coordenadasUTM[input$tabla_inicio_utm_rows_selected,], datos$puntos_coordenadasUTM[-input$tabla_inicio_utm_rows_selected,])
         datos_utm<-datos$datos_utm_ordenados[,c(input$col_nombre_UTM,input$col_E_UTM, input$col_N_UTM,input$col_h_UTM)]
         
         #Restricciones
-        if(class(datos_utm[,3])!="numeric" && class(datos_utm[,2])!="numeric" &&
-           class(datos_utm[,4])!="numeric"){
+        if(class(datos_utm[,3])!="numeric" || class(datos_utm[,2])!="numeric" ||
+           class(datos_utm[,4])!="numeric" ){
             
             showModal(modalDialog(title = "Error",
                                   h4("Error: Tus columnas no son de tipo número: a)Asugurate de que tus columnas sean de tipo número
@@ -1188,9 +1189,9 @@ shinyServer(function(input, output, session) {
             return()
         }
         
-        
+        names(datos_utm)<-c("Punto","E","N","h") ## No borrar esto nombres, de ellos depende la función 
         datos$correccion_utm<-funcion_UTM_planas(datos_utm[,-1], as.numeric(input$crs))%>%select(-Acimut_rad,-acimut_grad)
-        
+       
         removeModal()
     })
     
@@ -1251,9 +1252,9 @@ shinyServer(function(input, output, session) {
                 overlayGroups = c("Puntos de control", "Resultados")
             )%>%
             addCircleMarkers(data=datos$mapa_datos_input, color = "red", group = "Puntos de control",
-                             label = ~as.character(datos$mapa_datos_input[,3]))%>%
+                             label = ~as.character(V1))%>%
             addCircleMarkers(data=datos$mapa_datos_resultados, color="blue", group = "Resultados",
-                             label = ~as.character(datos$mapa_datos_input[,3]))
+                             label = ~as.character(V1))
         
         mapa
     })
@@ -1525,6 +1526,7 @@ shinyServer(function(input, output, session) {
             return()
         }
         guardar_input<-datos$puntos_coordenadasUTM[,c(input$col_nombre_UTM, input$col_N_UTM, input$col_E_UTM, input$col_h_UTM)]
+        names(guardar_input)<-c("punto","n","e","he")
         ### Restricciones
         if(class(guardar_input[,2])!="numeric" || class(guardar_input[,3])!="numeric" || 
            class(guardar_input[,4])!="numeric" || class(guardar_input[,1])!="character"){
