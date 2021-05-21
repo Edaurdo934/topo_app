@@ -1089,9 +1089,8 @@ shinyServer(function(input, output, session) {
     
     
     output$texto_corregido<-renderPrint({
-        punto<-datos$datos_corregir[,c(input$col_nom_local)]
-        cbind(punto,datos$datos_corregidos)
-        })
+        
+        cbind(datos$datos_corregir[,c(input$col_nom_local)],as.data.frame(datos$datos_corregidos))})
     
     ## Genera el panel inferior al momento de calcular nuevos datos
     output$panel_emergente_resultados_local<- renderUI(
