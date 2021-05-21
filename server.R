@@ -1108,7 +1108,7 @@ shinyServer(function(input, output, session) {
     output$descarga_local_resultado<-downloadHandler(
         filename="resultados_proceso_local.csv",
         content=function(file){
-            csv_resultados_local<- cbind(datos$datos_corregir[,input$col_nom_local],datos$datos_corregidos)
+            csv_resultados_local<- cbind(datos$datos_corregir[,c(input$col_nom_local)],datos$datos_corregidos)
             
             write.csv(csv_resultados_local,file, row.names = FALSE)
         }
@@ -1173,7 +1173,6 @@ shinyServer(function(input, output, session) {
         
         datos$datos_utm_ordenados<-rbind(datos$puntos_coordenadasUTM[input$tabla_inicio_utm_rows_selected,], datos$puntos_coordenadasUTM[-input$tabla_inicio_utm_rows_selected,])
         datos_utm<-datos$datos_utm_ordenados[,c(input$col_nombre_UTM,input$col_E_UTM, input$col_N_UTM,input$col_h_UTM)]
-        names(datos_utm)<-c("Punto","E","N","q")
         
         #Restricciones
         if(class(datos_utm[,3])!="numeric" && class(datos_utm[,2])!="numeric" &&
@@ -1359,6 +1358,7 @@ shinyServer(function(input, output, session) {
     observeEvent(input$aceptar_proceso_local,{
         if(length(input$proceso_local)>1){
             guardar_match<-datos$datos_match[,c(input$col_N, input$col_E, input$col_h,input$col_Y, input$col_X,input$col_H)]
+            names(guardar_match)<-c("n","e","he","y","x","ho")
             ### Restricciones
             if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric" || class(guardar_match[,3])!="numeric" ||
                class(guardar_match[,4])!="numeric" || class(guardar_match[,5])!="numeric" || class(guardar_match[,6])!="numeric"){
@@ -1369,6 +1369,7 @@ shinyServer(function(input, output, session) {
             }
         }else if(input$proceso_local%in%"horizontal"){
             guardar_match<-datos$datos_match[,c(input$col_N, input$col_E, input$col_Y, input$col_X)]
+            names(guardar_match)<-c("n","e","y","x")
             ### Restricciones
             if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric" || 
                class(guardar_match[,3])!="numeric" || class(guardar_match[,4])!="numeric"){
@@ -1379,6 +1380,7 @@ shinyServer(function(input, output, session) {
             }
         } else if(input$proceso_local%in%"vertical"){
             guardar_match<-datos$datos_match[,c(input$col_N, input$col_E, input$col_h, input$col_H)]
+            names(guardar_match)<-c("n","e","he","ho")
             ### Restricciones
             if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric" || class(guardar_match[,3])!="numeric" ||
                class(guardar_match[,4])!="numeric"){
@@ -1394,9 +1396,9 @@ shinyServer(function(input, output, session) {
         user_id<-data.frame(user_id=rep(user_data()$user_id,length(datos$datos_match[,1])))
         fecha<-data.frame(fecha=rep(Sys.Date(),length(datos$datos_match[,1])))
         ##Restricciones
-        if(class(datos$datos_match[,1])!="character"){
+        if(class(datos$datos_match[,1])%in%"character"){
             showNotification(
-                h4("Las columnas nombre de puto no es caracter: No se guardaran los datos"), 
+                h4("La columna nombre de punto no es caracter: No se guardaran los datos"), 
                 action = NULL, duration = 5, type = "warning")
             return()
         }
@@ -1431,6 +1433,7 @@ shinyServer(function(input, output, session) {
             
             if(input$panel_correccion_multiple%in%"horizontal"){
                 guardar_match<-datos$datos_corregir[,c(input$col_Y_c, input$col_X_c)]
+                names(guardar_match)<-c("y","x")
                 ### Restricciones
                 if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric"){
                     showNotification(
@@ -1441,6 +1444,7 @@ shinyServer(function(input, output, session) {
                 
             }else if(input$panel_correccion_multiple%in%"vertical"){
                 guardar_match<-datos$datos_corregir[,c(input$col_N_c, input$col_E_c, input$col_h_c)]
+                names(guardar_match)<-c("n","e","he")
                 ### Restricciones
                 if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric" || 
                    class(guardar_match[,3])!="numeric" ){
@@ -1454,6 +1458,7 @@ shinyServer(function(input, output, session) {
                 }
         }else if(input$proceso_local%in%"horizontal"){
             guardar_match<-datos$datos_corregir[,c(input$col_Y_c, input$col_X_c)]
+            names(guardar_match)<-c("y","x")
             ### Restricciones
             if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric"){
                 showNotification(
@@ -1463,6 +1468,7 @@ shinyServer(function(input, output, session) {
             }
         } else if(input$proceso_local%in%"vertical"){
             guardar_match<-datos$datos_corregir[,c(input$col_N_c, input$col_E_c, input$col_h_c)]
+            names(guardar_match)<-c("n","e","he")
             ### Restricciones
             if(class(guardar_match[,1])!="numeric" || class(guardar_match[,2])!="numeric" || 
                class(guardar_match[,3])!="numeric"){
@@ -1478,9 +1484,9 @@ shinyServer(function(input, output, session) {
         user_id<-data.frame(user_id=rep(user_data()$user_id,length(datos$datos_corregir[,1])))
         fecha<-data.frame(fecha=rep(Sys.Date(),length(datos$datos_corregir[,1])))
         ##Restricciones
-        if(class(datos$datos_corregir[,c(input$col_nom_local)])!="character"){
+        if(class(datos$datos_corregir[,c(input$col_nom_local)])%in%"character"){
             showNotification(
-                h4("La columna nombre de puto no es caracter: No se guardaran los datos"), 
+                h4("La columna nombre de punto no es caracter: No se guardaran los datos"), 
                 action = NULL, duration = 5, type = "warning")
             return()
         }
