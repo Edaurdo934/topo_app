@@ -105,7 +105,7 @@ resultados <- function(matriz_elementos, x){
 }
 
 ## Cálculo matricial ajuste local vertical
-### Recibe una matriz E,N, H, h y devuelve las matrices X el vector Y y el vetor B
+### Recibe una matriz E,N, H, h y devuelve las matrices X el vector Y y el vetor B y los residuos r
 crear_B <- function(x,h){
     matriz_x <- matrix(nrow = nrow(x), ncol = 3)
     for (i in 1:nrow(x)) {
@@ -126,8 +126,9 @@ crear_B <- function(x,h){
     tx_x_y <- matriz_trans_x %*% y
     
     mat_b <- mat_inv %*% tx_x_y
+    matriz_r <- (matriz_x %*% mat_b)-y
     
-    matrices<-list(matriz_x,y,mat_b)
+    matrices<-list(matriz_x,y,mat_b, matriz_r)
     
     return(matrices)
     
@@ -866,7 +867,7 @@ shinyServer(function(input, output, session) {
             names(matriz_resultados_H)<-c("Matriz A","Parámetros","Vector L","Vector residuos")
             
             matriz_resultados_V<-crear_B(matriz_coordenadas_V)
-            names(matriz_resultados_V)<-c("Matriz A","Vector Y","Parámetros")
+            names(matriz_resultados_V)<-c("Matriz A","Vector Y","Parámetros", "Vector residuos")
             
             matriz_resultados_HV<-list(matriz_resultados_H, matriz_resultados_V)
             names(matriz_resultados_HV)<-c("Horizontal","Vertical")
@@ -913,7 +914,7 @@ shinyServer(function(input, output, session) {
             }
             
             matriz_resultados<-crear_B(matriz_coordenadas)
-            names(matriz_resultados)<-c("Matriz A","Vector Y","Parámetros")
+            names(matriz_resultados)<-c("Matriz A","Vector Y","Parámetros", "Vector residuos")
             datos$matrices<-matriz_resultados
         }else{
             NULL
@@ -1089,8 +1090,8 @@ shinyServer(function(input, output, session) {
     
     
     output$texto_corregido<-renderPrint({
-        
-        cbind(datos$datos_corregir[,c(input$col_nom_local)],as.data.frame(datos$datos_corregidos))})
+        Punto<-datos$datos_corregir[,c(input$col_nom_local)]
+        cbind(Punto,as.data.frame(datos$datos_corregidos))})
     
     ## Genera el panel inferior al momento de calcular nuevos datos
     output$panel_emergente_resultados_local<- renderUI(
@@ -1110,7 +1111,8 @@ shinyServer(function(input, output, session) {
     output$descarga_local_resultado<-downloadHandler(
         filename="resultados_proceso_local.csv",
         content=function(file){
-            csv_resultados_local<- cbind(datos$datos_corregir[,c(input$col_nom_local)],datos$datos_corregidos)
+            Punto<-datos$datos_corregir[,c(input$col_nom_local)]
+            csv_resultados_local<- cbind(Punto,as.data.frame(datos$datos_corregidos))
             
             write.csv(csv_resultados_local,file, row.names = FALSE)
         }
@@ -1254,9 +1256,9 @@ shinyServer(function(input, output, session) {
                 overlayGroups = c("Puntos de control", "Resultados")
             )%>%
             addCircleMarkers(data=datos$mapa_datos_input, color = "red", group = "Puntos de control",
-                             label = ~as.character(V1))%>%
+                             label = ~as.character(datos$mapa_datos_input$Punto))%>%
             addCircleMarkers(data=datos$mapa_datos_resultados, color="blue", group = "Resultados",
-                             label = ~as.character(V1))
+                             label = ~as.character(datos$mapa_datos_input$Punto))
         
         mapa
     })
@@ -1293,12 +1295,14 @@ shinyServer(function(input, output, session) {
         datos_mapa_UTM<-cbind(datos_utm,datos$correccion_utm)
         sf_datos_locales<-st_as_sf(datos_mapa_UTM, coords=c("Long","Lat"), crs=4326)
         
-        datos$mapa_datos_input<-sf_datos_locales
+        names(sf_datos_locales)[1]<-c("Punto")## No cambiar este nombre, de el depende el etiquetado del mapa
+        datos$mapa_datos_input<-sf_datos_locales##Datos de entrada
         
         sf_datos_resultados<-st_as_sf(datos_mapa_UTM, coords=c("E_top","N_top"), crs=as.numeric(input$crs_mapa_UTM))
         sf_datos_resultados<-st_transform(sf_datos_resultados, 4326)
         
-        datos$mapa_datos_resultados<-sf_datos_resultados
+        names(sf_datos_resultados)[1]<-c("Punto") ## No cambiar este nombre, de el depende el etiquetado del mapa
+        datos$mapa_datos_resultados<-sf_datos_resultados ## Datos de resultados
         
     })
     
@@ -1323,14 +1327,19 @@ shinyServer(function(input, output, session) {
     )
     
     observeEvent(input$crear_mapa_local,{
-        resultados_utm<-cbind(datos$datos_corregir[,input$col_nom_local],datos$datos_corregidos)
+
+        #Restrcción, verifica que si los datos son de altura, se tengan las mismas columnas que los datos de entreada
+        if(ncol(datos$datos_corregidos)==1){
+            resultados_utm<-cbind(datos$datos_corregir[,c(input$col_nom_local, input$col_E_c, input$col_N_c)],datos$datos_corregidos)
+        } else {
+            resultados_utm<-cbind(datos$datos_corregir[,input$col_nom_local],datos$datos_corregidos)
+        }
         resultados_utm[,2]<-as.numeric(resultados_utm[,2])
         resultados_utm[,3]<-as.numeric(resultados_utm[,3])
         resultados_utm_sf<-resultados_utm %>%as.data.frame%>%st_as_sf(coords=c(2,3), crs= as.numeric(input$crs_mapa_local))
         resultados_utm_sf<- st_transform(resultados_utm_sf, 4326)
-        
+        names(resultados_utm_sf)[1]<-c("Punto")
         datos$mapa_datos_resultados<-resultados_utm_sf
-        
         ## Restricciones
         if(class(datos$datos_match[,c(input$col_E)])!="numeric" || class(datos$datos_match[,c(input$col_N)])!="numeric" ){
             showNotification(
@@ -1340,7 +1349,7 @@ shinyServer(function(input, output, session) {
         }
         match_sf<-st_as_sf(datos$datos_match, coords=c(input$col_E, input$col_N), crs=as.numeric(input$crs_mapa_local))
         match_sf<-st_transform(match_sf, 4326)
-        
+        names(match_sf)[1]<-c("Punto")   # No cambiar este nombre, de el depende el etiquetado del mapa
         datos$mapa_datos_input<-match_sf
     })
     
@@ -1531,7 +1540,7 @@ shinyServer(function(input, output, session) {
         names(guardar_input)<-c("punto","n","e","he")
         ### Restricciones
         if(class(guardar_input[,2])!="numeric" || class(guardar_input[,3])!="numeric" || 
-           class(guardar_input[,4])!="numeric" || class(guardar_input[,1])!="character"){
+           class(guardar_input[,4])!="numeric"){
             showNotification(
                 h4("Las columnas que seleccionaste no son numéricas; No se guardaran los datos"), 
                 action = NULL, duration = 5, type = "warning")

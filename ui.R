@@ -32,7 +32,7 @@ shinyUI(
                             additional_ui = fluidRow(
                                 column(10,
                                        actionLink("registro",label = "Registrate", class="pull-right"),
-                                       a("Ayuda", href = " mailto:jose.oro.joj@gmail.com", target = "_blank")
+                                       a("Ayuda", href = " mailto:soporte@solucionesgeograficas.pe", target = "_blank")
                                        )
                             )
         ),
